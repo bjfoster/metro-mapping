@@ -4,8 +4,7 @@ import numpy as np
 import datetime
 from zipfile import ZipFile
 
-
-class Metro:
+class Project:
 
     def __init__(self, gtfs_zip_file_name: str) -> None:
 

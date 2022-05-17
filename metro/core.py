@@ -1,7 +1,70 @@
-from typing import Callable
 import pandas as pd
+import numpy as np
 
 import datetime
+from zipfile import ZipFile
+
+
+class Metro:
+
+    def __init__(self, gtfs_zip_file_name: str) -> None:
+
+        self.gtfs_zip_file_name: str = gtfs_zip_file_name
+
+        self.agency: Agency = None
+
+        self.transfer_between_stops = None
+
+    def _df_from_zipped_csv(self, bytes: bytes) -> pd.DataFrame:
+
+        df = pd.DataFrame([sub.split(",")
+                          for sub in bytes.decode('utf-8').splitlines()])
+        df, df.columns = df[1:], df.iloc[0]
+
+        return df.reset_index(drop=True)
+
+    def generate_transfers(self, transfers_df: pd.DataFrame):
+
+        def transfer(stop_from: Stop, stop_to: Stop) -> tuple[int, int]:
+
+            from_df = transfers_df[transfers_df['from_stop_id'] == stop_from.id]
+
+            if len(from_df) <= 0:
+                return (None, None)
+
+            to_df = from_df[from_df['to_stop_id'] == stop_to.id]
+
+            if len(to_df) <= 0:
+                return (None, None)
+
+            return (int(to_df['min_transfer_time']), int(to_df['transfer_type']))
+
+        self.transfer_between_stops = transfer
+
+    def load(self):
+
+        with ZipFile(self.gtfs_zip_file_name, 'r') as zip:
+
+            agency_df = self._df_from_zipped_csv(zip.read('agency.txt'))
+            routes_df = self._df_from_zipped_csv(zip.read(R'routes.txt'))
+            stops_df = self._df_from_zipped_csv(zip.read(R'stops.txt'))
+            services_df = self._df_from_zipped_csv(zip.read(R'calendar.txt'))
+            shapes_df = self._df_from_zipped_csv(zip.read(R'shapes.txt'))
+            trips_df = self._df_from_zipped_csv(zip.read(R'trips.txt'))
+            stop_times_df = self._df_from_zipped_csv(zip.read(R'stop_times.txt'))
+            transfers_df = self._df_from_zipped_csv(zip.read(R'transfers.txt'))
+        
+        self.agency = Agency(agency_df)
+        self.agency.generate_routes(routes_df)
+        self.agency.generate_stops(stops_df)
+        self.agency.generate_services(services_df)
+        self.agency.generate_shapes(shapes_df)
+        self.agency.generate_trips(trips_df)
+        self.agency.generate_stop_times(stop_times_df)
+        
+        self.generate_transfers(transfers_df)
+
+        self.agency.cross_reference_objects()
 
 
 class Agency:
@@ -148,16 +211,16 @@ class Stop:
 
         return f"🛑 ID: {self.id} Name: {self.name}"
 
-    def _add_child_station(self, child: Stop) -> None:
+    def _add_child_station(self, child: 'Stop') -> None:
 
         self.child_stations.append(child)
 
-    def assign_parent_station(self, parent_station: Stop) -> None:
+    def assign_parent_station(self, parent_station: 'Stop') -> None:
 
         self.parent_station = parent_station
         self.parent_station._add_child_station(self)
 
-    def add_stop_time(self, stop_time: StopTime) -> None:
+    def add_stop_time(self, stop_time: 'StopTime') -> None:
 
         self.stop_times.append(stop_time)
 
@@ -207,7 +270,11 @@ class Shape:
             self.lat.append(float(row['shape_pt_lat']))
             self.lon.append(float(row['shape_pt_lon']))
             self.sequence.append(int(row['shape_pt_sequence']))
-            self.dist_traveled.append(float(row['shape_dist_traveled']))
+
+            try:
+                self.dist_traveled.append(float(row['shape_dist_traveled']))
+            except ValueError:
+                self.dist_traveled.append(np.NaN)
 
     def __str__(self) -> str:
 
@@ -248,7 +315,7 @@ class Trip:
 
         self.shape = shape
 
-    def add_stop_time(self, stop_time: StopTime) -> None:
+    def add_stop_time(self, stop_time: 'StopTime') -> None:
 
         self.stop_times.append(stop_time)
 
@@ -272,8 +339,12 @@ class StopTime:
         self.stop_headsign: str = str(data_row['stop_headsign'])
         self.pickup_type: int = int(data_row['pickup_type'])
         self.drop_off_type: int = int(data_row['drop_off_type'])
-        self.shape_dist_traveled: float = float(
-            data_row['shape_dist_traveled'])
+
+        try:
+            self.shape_dist_traveled: float = float(
+                data_row['shape_dist_traveled'])
+        except ValueError:
+            self.shape_dist_traveled = np.NaN
 
         self.stop: Stop = None
         self.trip: Trip = None
@@ -291,20 +362,4 @@ class StopTime:
         self.trip = trip
 
 
-def generate_transfers(transfers_df: pd.DataFrame):
 
-    def transfer(stop_from: Stop, stop_to: Stop) -> tuple[int, int]:
-
-        from_df = transfers_df[transfers_df['from_stop_id'] == stop_from.id]
-
-        if len(from_df) <= 0:
-            return (None, None)
-
-        to_df = from_df[from_df['to_stop_id'] == stop_to.id]
-
-        if len(to_df) <= 0:
-            return (None, None)
-
-        return (int(to_df['min_transfer_time']), int(to_df['transfer_type']))
-
-    return transfer
